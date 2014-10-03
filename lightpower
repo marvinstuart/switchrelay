@@ -1,31 +1,28 @@
-/* WebPower 1.021 using the Webduino server library
-WebPower (c)2013 Kelly Keeton http://www.kellykeeton.com/
-code modified used from http://brwry.com/2012/04/storing-settings-between-brews/
- 
-This application will run on a Arduino with a WizArd compatable ethernet shield.
+/* 
+This application will run on a Arduino with a WizArd compatible ethernet shield.
 The Arduino will server up a jQuery enhanced website using webduino for switching on and off relays
-The relays can be connected to any number of applications. Most Spicific it was indended
+The relays can be connected to any number of applications. Most Specific it was intended
 for remote automation of utility main's power for home automation.
- 
-You will need the webduino libary in your arduino/library folder to compile;
-built in Arduino 1.0.5 and webduino 1.7
+  
+You will need the webduino library in your Arduino /library folder to compile;
+built in Arduino 1.5.4 and webduino 1.7 (you will need to restart IDE to load)
  
 https://github.com/sirleech/Webduino
  
 The application also has functionality for Push Button, which is essentially a pulse rather
-then a latch of a relay, this is usefull for hooking up to items that need turned on and off
+then a latch of a relay, this is useful for hooking up to items that need turned on and off
 with a time delay on the power button.
- 
+  
 This code assumes the use of a 2x2 or 1x4 optio-isolator relay module. for a max of 7 relays
 (I am out of memory in default code to add more) Any use of high voltage or damage to your hardware is not my fault.
-I assume no risk or responsability for the quality of this code.
- 
+I assume no risk or responsibility for the quality of this code.
+  
 To enable auth look below and change the settings accordingly. you will need to base 64 encode your creds.
- 
+  
 Currently I am not saving the Port Name to EEPROM, if you have suggestions on how to accomplish
-this quickly let me know, I just havent done it yet.. untill then you can edit the relayUse array below
+this quickly let me know, I just haven’t done it yet.. until then you can edit the relayUse array below
 change 'Undefined' To your port name after reboot, Port1,Port2... etc.
- 
+  
 To use this, enter the following USLs into your browser.
 Replace "host" with the IP address assigned to the Arduino. (variables below)
  
@@ -47,328 +44,424 @@ http://host/settings
 This URL will assign the pins to relays, by default all relays are disabled
 this pin to relay information is stored on your Arduino EEPROM
 Note: 255 is the default and that means the Item is not active.
- 
-ChangeLog:
-1.00    Inital release
-1.01    Changes in documentation and increased pin use to 7 with some memory cleanup,refresh
-1.02    BugFixes and corrections to documentation
+  
+
 */
+
 #define WEBDUINO_FAIL_MESSAGE "<h1>Request Failed</h1>"
-#define WEBDUINO_SERVER_HEADER "Server: WebPower/"
-#define WEBDUINO_AUTH_REALM "WebPower"
+#define WEBDUINO_SERVER_HEADER "Server: Switch/"
+#define WEBDUINO_AUTH_REALM "Switch"
 #define WEBDUINO_SERIAL_DEBUGGING 0
 #define PREFIX ""
 #include "SPI.h"
 #include "Ethernet.h"
 #include "WebServer.h"
 #include <EEPROM.h>
-/* CHANGE THIS TO MATCH YOUR HOST NETWORK.  Most home networks are in
-* the 192.168.0.XXX or 192.168.1.XXX subrange.  Pick an address
-* that's not in use and isn't going to be automatically allocated by
-* DHCP from your router. */
-static uint8_t ip[] = {10,42,42,55};
-static uint8_t gateway[] = {10,42,42,1};
+ /* CHANGE THIS TO MATCH YOUR HOST NETWORK. Most home networks are in
+ * the 192.168.0.XXX or 192.168.1.XXX subrange. Pick an address
+ * that's not in use and isn't going to be automatically allocated by
+ * DHCP from your router. */
+static uint8_t ip[] = {192,168,1,222};
+static uint8_t gateway[] = {192,168,1,1};
 static uint8_t subnet[] = {255,255,255,0};
 static uint8_t mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-/* The following should be updated as required
-* The relayUse array human object names for the Relay Function
-*/
+ /* The following should be updated as required
+ * The relayUse array human object names for the Relay Function
+ */
 String relayUse[] = {"Undefined","Undefined","Undefined","Undefined","Undefined","Undefined","Undefined"}; //defaults for pin names. EEPROM write not emplimented for this yet.
-const uint8_t PulseTime = 500; // time in miliseconds for pulse high width:global setting
-boolean invertOO = true; //if your using different hardware setup or relay boards your HIGH might be ON or OFF(or NO/NC); true= HIGH=ON;
-#define THEME "a" //options a-e see http://jquerymobile.com/demos/1.2.1/docs/pages/pages-themes.html
-//the following variables are normally not changed proceed undocumented
-//
+boolean invertOO = true; //if your using different hardware setup or relay boards your HIGH might be ON or OFF(or NO/NC) just switch this (global settings)
+#define THEME "b" //options a-e see http://jquerymobile.com/demos/1.2.1/docs/pages/pages-themes.html
+ //the following variables are normally not changed proceed undocumented
+ //
+const int PulseTime = 500; // time in miliseconds for pulse high width:global setting
 WebServer webserver(PREFIX, 80); // port webserver will listen on HTTP default is port 80
 const char* AUTHENTICATION = "YWRtaW46YWRtaW4="; //admin:admin Base64-encoded
 boolean AUTHENABLED = false; //use Auth on Switching and settings Page
 #define MAXrelay 7 //the upper limit of PINS that will be used (memory constraints)
+int TotalRelay = 9;
 boolean relayAtBoot = LOW; // for high or low state at boot of code, typically not changed as invert deals
-uint8_t relayPin[] = {9,8,7,6,5,4,3}; //the default pins to relay (stored in EEPROM after you change in web)
-uint8_t relayType[] = {0,0,0,0,0,0,0}; //the default pin type relay-0 or PWM-1 (stored in EEPROM after you change in web)
-static uint8_t relayPinAddressStart = 255; //default pis status for EEPROM
-static uint8_t relayTypeAddressStart = 0; //default pin type for EEPROM
- 
+boolean HardwareControl = true; // enable hardware buttons for ON off
+#define AnalogONpin A0 //pin for analog on button
+#define AnalogOFFpin A1 //pin for analog off button
+boolean AnalogEnabled = false; // enable printing the output of analog pins to the root webpage used for reading device LED woth optioresistor for "on off" status etc..
+#define Analog1Pin A2 //pin for analog reading
+#define Analog2Pin A3 //pin for analog reading
+#define Analog1UpperValue 900 //the upper value for analog reading after this point will flip to "on" vs off
+#define Analog2UpperValue 900 //the upper value for analog reading after this point will flip to "on" vs off
+boolean Analog1 = false; //false = off
+boolean Analog2 = false; //false = off
+unsigned long previousMillis = 0;
 P(htmlHead) =
 "<!DOCTYPE html><html><head>"
-"<title>WebPower</title>"
-"<meta name='viewport' content='width=device-width, initial-scale=1'>"
-"<META HTTP-EQUIV='Pragma' CONTENT='no-cache'>"
-"<link rel='stylesheet' href='http://code.jquery.com/mobile/1.2.1/jquery.mobile-1.2.1.min.css' />"
-"<script src='http://code.jquery.com/jquery-1.8.3.min.js'></script>"
-"<script src='http://code.jquery.com/mobile/1.2.1/jquery.mobile-1.2.1.min.js'></script>"
+"<title>PowerSwitch</title>"
+"<meta name='viewport' content='width=device-width, initial-scale=3'>"
+"<META HTTP-EQUIV='CACHE-CONTROL' CONTENT='NO-CACHE'>"
+"<link rel='stylesheet' href='http://marvinstuart.com/switch/jquery.mobile.min.css' />"
+"<script src='http://marvinstuart.com/switch/jquery.min.js'></script>"
+"<script src='http://marvinstuart.com/switch/jquery.mobile.min.js'></script>"
 "</head><body>"
 "<div data-role='page' data-theme='"THEME"'>"
-"<div data-role='header'><a href='/'>PowerStatus</a><center>WebPower</center><a href='/webpower'>SwitchPower</a></h1></div><!-- /header -->"
+"<div data-role='header'><a href='/'>SwitchStatus</a><center></center><a href='/switch'>SwitchPower</a></h1></div><!-- /header -->"
 "<div data-role='content'>";
-P(htmlFooter) = "<!-- /content --></div><!-- /page --></body></html>";
+P(htmlFooter) = "<div data-role='footer' data-position='fixed'><h6>Remote Switch</h6></div><!-- /footer -->";// add footer information
 P(endrefresh)="<button id='PageRefresh'>Refresh</button><script type='text/javascript'>$('#PageRefresh').click(function() {location.reload();});</script>";
+// the following are system variables
+static uint8_t relayPinAddressStart = 255; //default pis status for EEPROM
+static uint8_t relayTypeAddressStart = 0; //default pin type for EEPROM
+uint8_t relayPin[] = {9,8,7,6,5,4,3}; //the default pins to relay (stored in EEPROM after you change in web)
+uint8_t relayType[] = {0,0,0,0,0,0,0}; //the default pin type relay-0 or PWM-1 (stored in EEPROM after you change in web)
+uint8_t aio = 1;
+uint8_t aif = 1;
+P(analog1ON) = "Analog Sensor 1 <font color='green'>ON</font>";
+P(analog2ON) = "Analog Sensor 2 <font color='green'>ON</font>";
+P(formStart) = "<form action='" PREFIX "/switch' method='post'><center>";
+P(formEnd) = "<input type='submit' value='Submit'/><input type='reset' value='Reset'></form>";
+P(spacer) = "<fieldset data-role='controlgroup' data-type='horizontal'>";
  
 template<class T> // no-cost stream operator as described at http://arduiniana.org/libraries/streaming/
 inline Print &operator <<(Print &obj, T arg)
 {
-obj.print(arg);
-return obj;
+ obj.print(arg);
+ return obj;
 }
- 
+  
 void outputPins(WebServer &server, WebServer::ConnectionType type, bool addControls = false) //main web routine
 {
 server.httpSuccess();
 server.printP(htmlHead);
- 
+  
 if (addControls)
-{
-//    server << "<h1>Controlled Items:</h1><p>";
-server << "<form action='" PREFIX "/webpower' method='post'><center>";
+ {
+ server.printP(formStart);
+ }
+ for (int i = 1; i <= MAXrelay; ++i)
+ {
+ if (relayPin[i-1] >= 0 && relayPin[i-1] <= 53)
+ {
+ if (relayType[i-1] == 0)
+ {
+ String displayName;
+ if (relayUse[i-1].equalsIgnoreCase("Undefined")){
+ displayName = String("Relay-" + String(i,DEC) + " ");
+ }
+ else {
+ displayName = String(relayUse[i-1] + " ");
+ }
+ displayPins(server, relayPin[i-1], relayType[i-1], displayName, addControls);
+ }
+ else if (relayType[i-1] == 1)
+ {
+ String displayName;
+ if (relayUse[i-1].equalsIgnoreCase("Undefined")){
+ displayName = String("PulseRelay-" + String(i,DEC) + " ");
+ }
+ else {
+ displayName = String(relayUse[i-1] + "* ");
+ }
+ displayPins(server, relayPin[i-1], relayType[i-1], displayName, addControls);
+ }
+ }
+ }
+//display analog controls
+if (AnalogEnabled && Analog1 ) {
+ server.printP(analog1ON);
 }
-for (int i = 1; i <= MAXrelay; ++i)
-{
-if (relayPin[i-1] > 0 && relayPin[i-1] <= 53)
-{
-if (relayType[i-1] == 0)
-{
-String displayName;
-if (relayUse[i-1].equalsIgnoreCase("Undefined")){
-displayName = String("LatchRelay-" + String(i,DEC) + " ");
+if (AnalogEnabled && Analog2 ) {
+ server.printP(analog2ON);
 }
-else {
-displayName = String(relayUse[i-1] + " ");
-}
-displayPins(server, relayPin[i-1], displayName, addControls);
-}
-else if (relayType[i-1] == 1)
-{
-String displayName;
-if (relayUse[i-1].equalsIgnoreCase("Undefined")){
-displayName = String("PulseRelay-" + String(i,DEC) + " ");
-}
-else {
-displayName = String(relayUse[i-1] + "* ");
-}
-displayPins(server, relayPin[i-1], displayName, addControls);
-}
-}
-}
- 
 server << "</center></p>";
- 
+  
 if (addControls)
-{
-server << "<input type='submit' value='Submit'/><input type='reset' value='Reset'></form>";
-}
-else
-{
-server.printP(endrefresh);
-}
+ {
+ server.printP(formEnd);
+ }
+ else
+ {
+ server.printP(endrefresh);
+ }
 server.printP(htmlFooter);
 }
- 
+  
 void settingsPage(WebServer &server, WebServer::ConnectionType type) //settings only page
 {
-if(!server.checkCredentials(AUTHENTICATION) && AUTHENABLED)
-{
-server.httpUnauthorized(); //not authenticated
-}
-else //authenticated
-{
+ if(!server.checkCredentials(AUTHENTICATION) && AUTHENABLED)
+ {
+ server.httpUnauthorized(); //not authenticated
+ }
+ else //authenticated
+ {
 server.httpSuccess();
 server.printP(htmlHead);
 server << "<form action='" PREFIX "/settings' method='post'>";
 char pinName[4];
- 
+  
 for (int i = 1; i <= MAXrelay; ++i)
-{
-server << "<label>Relay Port " << i << "<input type='text' name='u" << i << "' value='" << relayUse[i-1] << "'>" << " Pin: <input type='text' name='h" << i << "' value='" << relayPin[i-1] << "'></label><br/>";
-pinName[0] = 'e';
-itoa(i, pinName + 1, 10);
-server.radioButton(pinName, "0", "Latched Relay(LR)", !relayType[i-1]);
-server << " ";
-server.radioButton(pinName, "1", "Pulse Relay(PR)", relayType[i-1]);
-server << "<br/>";
-}
+ {
+ server << "<label>Relay Port " << i << "<input type='text' name='u" << i << "' value='" << relayUse[i-1] << "'>" << " Pin: <input type='text' name='h" << i << "' value='" << relayPin[i-1] << "'></label><br/>";
+ pinName[0] = 'e';
+ itoa(i, pinName + 1, 10);
+ server.radioButton(pinName, "0", "Latched Relay(LR)", !relayType[i-1]);
+ server << " ";
+ server.radioButton(pinName, "1", "Pulse Relay(PR)", relayType[i-1]);
+ server << "<br/>";
+ }
 server << "<input type='submit' value='Submit'/></form>";
 server.printP(htmlFooter);
-}
+ }
 }
 void settingsCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete) //settings post handler
 {
-if (type == WebServer::POST)
-{
-bool repeat;
-char name[MAXrelay*3], value[MAXrelay*3];
-do
-{
-repeat = server.readPOSTparam(name, MAXrelay*3, value, MAXrelay*3);
-int pin = strtoul(name + 1, NULL, 10);
-int val = strtoul(value, NULL, 10);
-String valueString = String(value);
- 
-if (name[0] == 'h') //pinNumber
-{
-if (EEPROM.read(relayPinAddressStart+pin-1) == val)
-{
-//do nothing no change in value
-} else {
-if (relayPin[pin-1] > 0 && relayPin[pin-1] <=53)
-{
-digitalWrite(relayPin[pin-1], LOW); //make sure pin is off before overwritting it
+ if (type == WebServer::POST)
+ {
+ bool repeat;
+ char name[MAXrelay*3], value[MAXrelay*3];
+ do
+ {
+ repeat = server.readPOSTparam(name, MAXrelay*3, value, MAXrelay*3);
+ int pin = strtoul(name + 1, NULL, 10);
+ int val = strtoul(value, NULL, 10);
+ String valueString = String(value);
+  
+ if (name[0] == 'h') //pinNumber
+ {
+ if (EEPROM.read(relayPinAddressStart+pin-1) == val)
+ {
+ //do nothing no change in value
+ } else {
+ if (relayPin[pin-1] > 0 && relayPin[pin-1] <=53)
+ {
+ digitalWrite(relayPin[pin-1], LOW); //make sure pin is off before overwritting it
+ }
+ relayPin[pin-1] = val;
+ EEPROM.write(relayPinAddressStart+pin-1,val);
+ }
+ }
+ if (name[0] == 'e') //relay type
+ {
+ if (EEPROM.read(relayTypeAddressStart+pin-1) == val)
+ {
+ //do nothing no change in value
+ } else {
+ relayType[pin-1] = val;
+ EEPROM.write(relayTypeAddressStart+pin-1,val);
+ }
+ }
+ if (name[0] == 'u') //relay common name
+ {
+ relayUse[pin-1] = valueString;
+ }
+  
 }
-relayPin[pin-1] = val;
-EEPROM.write(relayPinAddressStart+pin-1,val);
-}
-}
-if (name[0] == 'e') //relay type
-{
-if (EEPROM.read(relayTypeAddressStart+pin-1) == val)
-{
-//do nothing no change in value
-} else {
-relayType[pin-1] = val;
-EEPROM.write(relayTypeAddressStart+pin-1,val);
-}
-}
-if (name[0] == 'u') //relay common name
-{
-relayUse[pin-1] = valueString;
-}
- 
-}
-while (repeat);
- 
+ while (repeat);
+  
 server.httpSeeOther(PREFIX "/settings");
+ }
+ else
+ settingsPage(server, type);
 }
-else
-settingsPage(server, type);
-}
- 
-void webpowerCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete)  // generic post handler and pin writer
+  
+void switchCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete) // generic post handler and pin writer
 {
-if (type == WebServer::POST)
-{
-bool repeat;
-char name[MAXrelay], value[MAXrelay];
-do
-{
-repeat = server.readPOSTparam(name, MAXrelay, value, MAXrelay);
-if (name[0] == 'd')
-{
-int pin = strtoul(name + 1, NULL, 10);
-int val = strtoul(value, NULL, 10);
-int pinindex = -1;
- 
-for( int a = 0; a<MAXrelay ; a++ )
-{
-if (pin == relayPin[a]) {
-pinindex = a;
-break;
+ if (type == WebServer::POST)
+ {
+ bool repeat;
+ char name[MAXrelay], value[MAXrelay];
+ do
+ {
+ repeat = server.readPOSTparam(name, MAXrelay, value, MAXrelay);
+ if (name[0] == 'd')
+ {
+ int pin = strtoul(name + 1, NULL, 10);
+ int val = strtoul(value, NULL, 10);
+ int pinindex = -1;
+  
+ for( int a = 0; a<MAXrelay ; a++ )
+ {
+ if (pin == relayPin[a]) {
+ pinindex = a;
+ break;
+ }
+ }
+ if (relayType[pinindex] == 0)
+ {
+ if (invertOO){ digitalWrite(pin, !val); } else { digitalWrite(pin, val); }
+ }
+ else
+ {
+ if (val){
+ if (invertOO){ digitalWrite(pin, !val); } else { digitalWrite(pin, val); }
+ delay(PulseTime);
+ if (invertOO){ digitalWrite(pin, val); } else { digitalWrite(pin, !val); }
+ }
+ }
+ }
+ }
+ while (repeat);
+  
+server.httpSeeOther(PREFIX "/switch");
+ }
+ else
+  
+ if(!server.checkCredentials(AUTHENTICATION) && AUTHENABLED)
+ {
+ server.httpUnauthorized(); //not authenticated
+ }
+ else //authenticated
+ {
+ outputPins(server, type, true);
+ }
 }
-}
-if (relayType[pinindex] == 0)
-{
-if (invertOO){ digitalWrite(pin, !val); } else { digitalWrite(pin, val); }
-}
-else
-{
-if (val){
-if (invertOO){ digitalWrite(pin, !val); } else { digitalWrite(pin, val); }
-delay(PulseTime);
-if (invertOO){ digitalWrite(pin, val); } else { digitalWrite(pin, !val); }
-}
-}
-}
-}
-while (repeat);
- 
-server.httpSeeOther(PREFIX "/webpower");
-}
-else
- 
-if(!server.checkCredentials(AUTHENTICATION) && AUTHENABLED)
-{
-server.httpUnauthorized(); //not authenticated
-}
-else //authenticated
-{
-outputPins(server, type, true);
-}
-}
- 
+  
 void defaultCmd(WebServer &server, WebServer::ConnectionType type, char *url_tail, bool tail_complete) //default web page loader
 {
-outputPins(server, type, false);
+ outputPins(server, type, false);
 }
- 
-void displayPins(WebServer &server, int pin, String label, bool addControls) //print the pin status
+  
+void displayPins(WebServer &server, int pin, int type, String label, bool addControls) //print the pin status
 {
-int val;
-if (invertOO){val = !digitalRead(pin); } else {  val = digitalRead(pin);}
-server << label;
-if (addControls)
-{
-char pinName[4];
-server << "<fieldset data-role='controlgroup' data-type='horizontal'>";
-pinName[0] = 'd';
-itoa(pin, pinName + 1, 10);
- 
-server.radioButton(pinName, "1", "On", val);
-server << " ";
-server.radioButton(pinName, "0", "Off", !val);
-server << "</fieldset>";
- 
+ int val;
+ if (invertOO){val = !digitalRead(pin); } else { val = digitalRead(pin);}
+ server << label;
+ if (addControls)
+ {
+ char pinName[4];
+ server.printP(spacer);
+ pinName[0] = 'd';
+ itoa(pin, pinName + 1, 10);
+  
+ if (type == 0)
+ {
+ //normal relay
+ server.radioButton(pinName, "1", "On", val);
+ server << " ";
+ server.radioButton(pinName, "0", "Off", !val);
+ server << "</fieldset>";
+ }
+ else if (type == 1)
+ {
+ //latch relay
+ server.radioButton(pinName, "1", "Switch", val);
+ server << "</fieldset>";
+ }
+  
+ }
+ else
+ {
+  
+ if (type == 0)
+ {
+ //normal relay
+ if (invertOO){
+ server << (!val ? "<font color='red'>Off</font>" : "<font color='green'>On</font>");
+ }
+ else
+ {
+ server << (val ? "<font color='red'>On</font>" : "<font color='green'><h6>Off</h6></font>");
+ }
+ }
+ else if (type == 1)
+ {
+ //latch relay - recomended that you monitor the analog sensor here and use to print status
+server << "<font color='red'>n/a</font>";
+ //if (AnalogEnabled && Analog1 ) {server.printP(analog1ON);}
+ }
+  
 }
-else
-{
- 
-if (invertOO){
-server << (!val ? "<font color='red'>OFF</font>" : "<font color='green'>ON</font>");
+ server << "<br/>";
 }
-else
-{
-server << (val ? "<font color='red'>OFF</font>" : "<font color='green'>ON</font>");
-}
- 
-}
-server << "<br/>";
-}
- 
+  
 void setup()
 {
-Serial.begin(9600);
-// set pins 0-9 for digital input
-for (int i = 0; i <= 9; ++i)
-{
-pinMode(i, OUTPUT);
-}
+ Serial.begin(9600);
+ // set pins 0-9 for digital input
+ for (int i = 2; i <= TotalRelay; ++i)
+ {
+ pinMode(i, OUTPUT);
+ }
  
-//Initialize pins as off
-for (int i = 0; i <= 9; ++i)
-{
-if (invertOO){
-digitalWrite(i, !relayAtBoot);
+//Initialize pins - this should be changed if other then UNO
+ for (int i = 2; i <= TotalRelay; ++i)
+ {
+ if (invertOO){
+ digitalWrite(i, !relayAtBoot);
+ }
+ else {
+ digitalWrite(i, relayAtBoot);
+ }
+  
+ }
+ //start web
+ Ethernet.begin(mac, ip);
+ webserver.begin();
+ webserver.setDefaultCommand(&defaultCmd);
+ webserver.addCommand("switch", &switchCmd);
+ webserver.addCommand("settings", &settingsCmd);
+ Serial.print("server address "); Serial.println(Ethernet.localIP()); //debug to serial if server is 0.0.0.0 web boot failed check sheld connections
+ for (int i = 0; i < sizeof(relayPin); i++){
+ relayPin[i] = EEPROM.read(relayPinAddressStart + i);
+ }
+ for (int i = 0; i < sizeof(relayType); i++){
+ relayType[i] = EEPROM.read(relayTypeAddressStart + i);
+ }
+ if (HardwareControl) {
+ digitalWrite(AnalogONpin, LOW);
+ digitalWrite(AnalogOFFpin, LOW);
+ }
+ if (AnalogEnabled) {
+ digitalWrite(Analog1Pin, INPUT);
+ digitalWrite(Analog2Pin, INPUT);
+ }
 }
-else {
-digitalWrite(i, relayAtBoot);
-}
- 
-}
-//start web
-Ethernet.begin(mac, ip);
-webserver.begin();
-webserver.setDefaultCommand(&defaultCmd);
-webserver.addCommand("webpower", &webpowerCmd);
-webserver.addCommand("settings", &settingsCmd);
-Serial.print("server at "); Serial.println(Ethernet.localIP()); //debug to serial
-for (int i = 0; i < sizeof(relayPin); i++){
-relayPin[i] = EEPROM.read(relayPinAddressStart + i);
-}
-for (int i = 0; i < sizeof(relayType); i++){
-relayType[i] = EEPROM.read(relayTypeAddressStart + i);
-}
-}
- 
+  
 void loop()
 {
-// process incoming connections one at a time forever
-webserver.processConnection();
+ // process incoming connections one at a time forever
+ webserver.processConnection();
+  
+//physical on/off control
+ if (HardwareControl) {
+ int aon = analogRead(AnalogONpin);
+ int aoff = analogRead(AnalogOFFpin);
+ if (aon > 1015){;
+ //Turn On relays incrementally
+ if (relayPin[aio-1] > 0 && relayPin[aio-1] <= 53){
+ if (invertOO){ digitalWrite(relayPin[aio-1], LOW); } else { digitalWrite(relayPin[aio-1], HIGH); }
+ delay(400); //cheap antibounce
+ aif = aio; //keep them synched
+ if (aio == sizeof(relayPin)){aio=1;} else { aio++;}
+ }
+ }
+ if (aoff > 1015){;
+ //if long delay press power down all relays
+ if(previousMillis > 8) //3 second press of button (400 second delay below*8) bug here for over 8 relays
+ {
+ Serial.println("do");
+ previousMillis = 0;
+ for (int i = 0; i < sizeof(relayPin); i++){
+ {
+ if (invertOO){ digitalWrite(relayPin[aif-1], HIGH); } else { digitalWrite(relayPin[aif-1], LOW); }
+ aif=1;aio=1; //reset hardware switching
+ }
+ }
+ }
+ else { previousMillis++;}
+ //Turn Off relays incrementally
+ if (relayPin[aif-1] > 0 && relayPin[aif-1] <= 53){
+ if (invertOO){ digitalWrite(relayPin[aif-1], HIGH); } else { digitalWrite(relayPin[aif-1], LOW); }
+ delay(400); //cheap antibounce
+ aio= aif; //keep them synched
+ if (aif == sizeof(relayPin)){aif=1;previousMillis = 0;} else { aif--;}
+ }
+ if(aif<1){aif=1;}
+ }
+ }
+  
+//analog reading
+ if (AnalogEnabled) {
+ int a1 = analogRead(Analog1Pin);
+ int a2 = analogRead(Analog2Pin);
+ //Serial.println(a1 + ":" + a2); //debug print for tuning the AnalogUpperValue settings
+ if (a1 > Analog1UpperValue){;Analog1 = true;}else {Analog1 = false;}
+ if (a2 > Analog2UpperValue){;Analog2 = true;}else {Analog2 = false;}
+ }
 }
-
