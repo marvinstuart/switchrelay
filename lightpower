@@ -356,7 +356,7 @@ void displayPins(WebServer &server, int pin, int type, String label, bool addCon
  }
  else
  {
- server << (val ? "<font color='red'>On</font>" : "<font color='green'><h6>Off</h6></font>");
+ server << (val ? "<font color='red'>On</font>" : "<font color='green'>Off</font>");
  }
  }
  else if (type == 1)
