@@ -3,11 +3,11 @@ switchrelay
  
 Setup
 -------------
-Arduino Uno
+HardareWare Required
 
-Arduino Ethernet
-
-4 channel relay (four)
+* Arduino Uno
+* Arduino Ethernet shield
+* 4 channel relay
 
 This application will run on a Arduino with a WizArd compatible ethernet shield.
 The Arduino will server up a jQuery enhanced website using webduino for switching on and off relays
